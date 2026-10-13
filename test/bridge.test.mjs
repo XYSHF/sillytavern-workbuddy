@@ -164,3 +164,54 @@ test('关闭和客户端取消会终止上游生成', async t => {
     const reader = response.body.getReader(); await reader.read(); controller.abort();
     await Promise.race([signalEvent, new Promise((_, reject) => setTimeout(() => reject(new Error('上游未取消')), 2000))]);
 });
+
+test('取消登录后，尚未返回的登录初始化不能重新建立登录状态', async t => {
+    const provider = mockProvider();
+    let complete;
+    provider.loginStart = () => new Promise(resolve => { complete = resolve; });
+    const { bridge, user } = await fixture(t, provider);
+    const starting = bridge.loginStart(user);
+    const rejected = assert.rejects(starting, { status: 409 });
+    await bridge.logout(user);
+    complete({ state: 'obsolete', authUrl: 'https://copilot.tencent.com/login' });
+    await rejected;
+    assert.equal(user.pending, null);
+});
+
+test('退出只取消当前账号的生成，其他账号不受影响', async t => {
+    const provider = mockProvider();
+    const signals = new Map();
+    provider.chat = async (stored, _body, signal) => {
+        signals.set(stored.account.uid, signal);
+        return new Response(new ReadableStream({ start(controller) {
+            controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"开始"}}]}\n\n'));
+            signal.addEventListener('abort', () => controller.error(new Error('cancelled')), { once: true });
+        } }), { headers: { 'Content-Type': 'text/event-stream' } });
+    };
+    const { bridge, user, directory } = await fixture(t, provider);
+    const other = await bridge.user(path.join(directory, 'b'));
+    user.stored = auth(); other.stored = auth(); other.stored.account.uid = 'other';
+    const body = JSON.stringify({ model: 'hy3', stream: true, messages: [{ role: 'user', content: '测试' }] });
+    const first = await request(bridge, user, '/chat/completions', { method: 'POST', body });
+    const second = await request(bridge, other, '/chat/completions', { method: 'POST', body });
+    await first.body.getReader().read(); await second.body.getReader().read();
+    await bridge.logout(user);
+    assert.equal(signals.get('test-user').aborted, true);
+    assert.equal(signals.get('other').aborted, false);
+});
+
+test('退出期间到达的刷新结果不能恢复账号或写回旧凭据', async t => {
+    const provider = mockProvider();
+    let complete;
+    provider.refresh = () => new Promise(resolve => { complete = resolve; });
+    const { bridge, user } = await fixture(t, provider);
+    user.stored = auth(); user.stored.auth.expiresAt = 0;
+    const refreshing = bridge.credentials(user);
+    const rejected = assert.rejects(refreshing, { status: 401 });
+    const exiting = bridge.logout(user);
+    assert.equal(user.stored, null, '退出开始后立即拒绝新的调用');
+    await assert.rejects(bridge.credentials(user), { status: 401 });
+    complete(auth()); await rejected; await exiting;
+    assert.equal(user.stored, null);
+    await assert.rejects(fs.stat(user.authFile), { code: 'ENOENT' });
+});

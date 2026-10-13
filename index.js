@@ -6,6 +6,7 @@ import { SECRET_KEYS, writeSecret } from '../../../secrets.js';
 const API = '/api/plugins/workbuddy';
 const settings = () => (extension_settings.workbuddy_local ||= {});
 let panel, modelSelect, statusText, loginLink, polling = false, loggedIn = false;
+let loginGeneration = 0, loggingOut = false;
 
 async function api(route) {
     let response;
@@ -21,8 +22,14 @@ async function api(route) {
 function setStatus(text) { statusText.textContent = text; }
 function report(error) { setStatus(error.message); }
 
-async function refreshModels() {
+function selectedWorkBuddy(base = settings().baseURL) {
+    return Boolean(base) && $('#main_api').val() === 'openai' && oai_settings.chat_completion_source === 'custom' && oai_settings.custom_url === base;
+}
+
+async function refreshModels(generation = loginGeneration) {
+    const preferred = (selectedWorkBuddy() ? oai_settings.custom_model : modelSelect.value) || settings().model || 'hy3';
     const data = await api('/models');
+    if (generation !== loginGeneration || !loggedIn || loggingOut) return;
     modelSelect.replaceChildren();
     for (const model of data.models) {
         const option = document.createElement('option');
@@ -30,7 +37,6 @@ async function refreshModels() {
         option.textContent = `${model.name} (${model.id})${model.credits ? ` · ${model.credits}` : ''}`;
         modelSelect.append(option);
     }
-    const preferred = settings().model || 'hy3';
     if ([...modelSelect.options].some(option => option.value === preferred)) modelSelect.value = preferred;
     modelSelect.disabled = !modelSelect.options.length;
     panel.querySelector('[data-action="connect"]').disabled = !modelSelect.options.length;
@@ -42,14 +48,20 @@ function setInput(selector, value) {
 }
 
 async function applyConnection({ silent = false } = {}) {
+    if (!loggedIn || loggingOut) return;
+    const generation = loginGeneration;
+    const previousBase = settings().baseURL;
+    if (silent && !selectedWorkBuddy(previousBase)) return;
     if (!silent) setStatus('正在连接酒馆…');
-    const model = silent ? settings().model : modelSelect.value;
-    if (!model) throw new Error('请先选择模型。');
     const connection = await api('/connection');
+    if (generation !== loginGeneration || loggingOut || !loggedIn || (silent && !selectedWorkBuddy(previousBase))) return;
+    const model = silent ? (oai_settings.custom_model || settings().model) : modelSelect.value;
+    if (!model) throw new Error('请先选择模型。');
     const url = new URL(connection.baseURL);
     if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || url.pathname !== '/v1') throw new Error('服务端返回的本机地址无效。');
     if (!silent) {
         const id = await writeSecret(SECRET_KEYS.CUSTOM, connection.key, 'WorkBuddy 本机连接');
+        if (generation !== loginGeneration || loggingOut || !loggedIn) return;
         if (!id) throw new Error('酒馆未能保存本机连接密钥。');
         $('#main_api').val('openai').trigger('change');
         $('#chat_completion_source').val('custom').trigger('change');
@@ -71,30 +83,35 @@ async function applyConnection({ silent = false } = {}) {
     }
 }
 
-async function updateStatus() {
+async function updateStatus(generation = loginGeneration) {
     const data = await api('/status');
+    if (generation !== loginGeneration) return data;
     loggedIn = data.loggedIn;
-    panel.querySelector('[data-action="login"]').disabled = loggedIn || polling;
-    panel.querySelector('[data-action="logout"]').disabled = !loggedIn && !polling;
+    panel.querySelector('[data-action="login"]').disabled = loggedIn || polling || loggingOut;
+    panel.querySelector('[data-action="logout"]').disabled = loggingOut || (!loggedIn && !polling);
     panel.querySelector('[data-action="models"]').disabled = !loggedIn;
     modelSelect.disabled = !loggedIn;
-    panel.querySelector('[data-action="connect"]').disabled = !loggedIn;
+    panel.querySelector('[data-action="connect"]').disabled = true;
     setStatus(loggedIn ? `已登录：${data.nickname}` : '还未登录，点击“登录 WorkBuddy”。');
-    if (loggedIn) await refreshModels();
+    if (loggedIn) await refreshModels(generation);
     else modelSelect.replaceChildren();
     return data;
 }
 
 async function login() {
-    if (polling || loggedIn) return;
+    if (polling || loggedIn || loggingOut) return;
+    const generation = ++loginGeneration;
+    const current = () => generation === loginGeneration && polling;
     // Create the window during the click; phone browsers may block an asynchronous popup.
     const popup = window.open('about:blank', '_blank');
     if (popup) popup.opener = null;
     let navigated = false;
     polling = true;
     panel.querySelector('[data-action="login"]').disabled = true;
+    panel.querySelector('[data-action="logout"]').disabled = false;
     try {
         const data = await api('/login/start');
+        if (!current()) return;
         const url = new URL(data.authUrl);
         if (url.protocol !== 'https:' || !['copilot.tencent.com', 'www.codebuddy.cn'].includes(url.hostname) || url.username || url.password || url.port) throw new Error('登录地址无效。');
         loginLink.href = url.href;
@@ -103,34 +120,54 @@ async function login() {
         setStatus('在腾讯页面完成登录，然后返回这里。无需复制任何 Token。');
         panel.querySelector('[data-action="logout"]').disabled = false;
         const deadline = Date.now() + 5 * 60_000;
-        while (polling && Date.now() < deadline) {
+        while (current() && Date.now() < deadline) {
             await new Promise(resolve => setTimeout(resolve, 2500));
-            if (!polling) return;
+            if (!current()) return;
             const result = await api('/login/poll');
+            if (!current()) return;
             if (!result.pending) {
                 polling = false;
                 loginLink.hidden = true;
                 await updateStatus();
+                if (generation !== loginGeneration) return;
                 setStatus('登录成功。选择模型后点击“接入酒馆”。');
                 return;
             }
         }
-        if (polling) throw new Error('登录链接已过期，请再次点击登录。');
+        if (current()) throw new Error('登录链接已过期，请再次点击登录。');
     } catch (error) {
-        report(error);
-        if (popup && !navigated) popup.close();
+        if (generation === loginGeneration) report(error);
     } finally {
-        polling = false;
-        panel.querySelector('[data-action="login"]').disabled = loggedIn;
+        if (popup && !navigated) popup.close();
+        if (generation === loginGeneration) {
+            polling = false;
+            panel.querySelector('[data-action="login"]').disabled = loggedIn || loggingOut;
+        }
     }
 }
 
 async function logout() {
+    if (loggingOut) return;
+    loginGeneration++;
     polling = false;
-    await api('/logout');
+    loggedIn = false;
+    loggingOut = true;
     loginLink.hidden = true;
-    await updateStatus();
-    setStatus('已从本插件退出。当前酒馆连接将无法继续调用此账号。');
+    for (const button of panel.querySelectorAll('button')) button.disabled = true;
+    modelSelect.disabled = true;
+    setStatus('正在退出…');
+    let confirmed = false;
+    try {
+        await api('/logout');
+        confirmed = true;
+        await updateStatus();
+        setStatus('已从本插件退出，正在生成的回复也已停止。');
+    } finally {
+        loggingOut = false;
+        // If the request failed, leave cancellation available; the server may still have the account.
+        panel.querySelector('[data-action="login"]').disabled = !confirmed || loggedIn;
+        panel.querySelector('[data-action="logout"]').disabled = confirmed && !loggedIn;
+    }
 }
 
 jQuery(async () => {
@@ -156,7 +193,7 @@ jQuery(async () => {
     }
     try {
         const oldURL = settings().baseURL;
-        const selected = $('#main_api').val() === 'openai' && oai_settings.chat_completion_source === 'custom' && oai_settings.custom_url === oldURL;
+        const selected = selectedWorkBuddy(oldURL);
         const data = await updateStatus();
         // A fresh local port after restarting Tavern is refreshed only for the already selected WorkBuddy connection.
         if (selected && data.loggedIn && settings().model) await applyConnection({ silent: true });
