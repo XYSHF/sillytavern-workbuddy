@@ -1,0 +1,75 @@
+# WorkBuddy 本机连接 · SillyTavern 插件
+
+在酒馆的扩展设置里完成 **腾讯网页登录 → 选择模型 → 接入酒馆**。转发组件随酒馆一起启动，不需要单独安装 WorkBuddy 桌面客户端、编译 Go 程序或另开一个转发服务。
+
+这是非官方的国内站适配，实验版 `0.1.0`。已在 Windows、SillyTavern 1.19.0、Node.js 24.16.0 上完成界面连接、真实 Hy3 流式回复和基础测试；安卓 Termux 采用同一套 Node.js 代码，仍需真机验证。
+
+## 安卓：首次安装一次
+
+先停止酒馆。在 Termux **进入你平时启动酒馆的那个文件夹**，粘贴这一条命令：
+
+```sh
+git clone https://github.com/XYSHF/sillytavern-workbuddy.git plugins/sillytavern-workbuddy && node plugins/sillytavern-workbuddy/install.mjs
+```
+
+然后用原来的方式启动酒馆。打开 **扩展设置 → WorkBuddy 本机连接**，点击“登录 WorkBuddy”，在腾讯页面完成自己的账号登录并返回酒馆；选择模型，点击“接入酒馆”即可。
+
+以后照常启动酒馆就行。首次授权失效时，再在插件里登录。
+
+需要 Node.js 20 或更高版本，以及酒馆原本需要的 Git。建议先更新到当前稳定版酒馆。酒馆应放在 Termux 的私有目录里，避免把账号数据存放在共享下载目录。
+
+## Windows / 下载 ZIP 安装
+
+将本仓库的文件夹放在 `SillyTavern/plugins/sillytavern-workbuddy` 中。从酒馆目录运行：
+
+```sh
+node plugins/sillytavern-workbuddy/install.mjs
+```
+
+重启后使用相同的三个按钮。安装器会备份 `config.yaml`，仅开启 `enableServerPlugins`，并复制前端文件到全局扩展目录。它不会更改监听范围、账户密码、CSRF 或其他连接的密钥。
+
+**不要只通过“安装扩展”粘贴仓库链接。** 酒馆的这个入口只安装前端；本插件还需要服务端组件，所以请使用上面的安装方法。服务端插件能以酒馆进程的权限运行，请确认信任代码后安装。
+
+## 数据与连接
+
+- 对话从本机酒馆直接发往 `copilot.tencent.com`，没有第三方中转服务器，也没有分析统计或聊天日志功能。腾讯及所选模型服务方仍会接收你的对话；使用此插件不等于对话完全私密。
+- 每个酒馆用户独立保存授权。腾讯访问凭据和刷新凭据保存在该用户数据目录的 `.workbuddy-plugin/auth.json`，不返回给浏览器、不写入仓库。
+- 酒馆使用独立的随机本机密钥。模型接口仅监听 `127.0.0.1`，拒绝浏览器跨站调用；登录管理接口继续使用酒馆自己的会话与 CSRF 防护。
+- 凭据在本机以文件形式保存，请保护酒馆数据目录，分享代码时不要分享 `data`、`secrets.json` 或 `.workbuddy-plugin`。Unix 文件权限为目录 `0700`、凭据文件 `0600`；Windows 使用文件夹原有权限。
+- 第一次点击“接入酒馆”会切换当前连接为“聊天补全 / 自定义”，保存本机密钥，清空该自定义连接的附加请求字段，取消当前连接配置档的选择。原有密钥记录和配置档保留。
+- 重启酒馆后，本机端口可能改变。打开酒馆页面时，插件会刷新已经选中的 WorkBuddy 连接地址；若换了其他连接，它不会替你切回。
+
+## 已支持与限制
+
+支持国内站官方网页登录、按需续期、实时模型目录、文字对话、流式输出和非流式输出。Hy3 已完成真实验证；图片、音频和复杂工具调用没有完成兼容性验证。长回复超过三分钟会超时，可缩短回复长度重试。
+
+模型倍率来自服务返回的列表；实际费用、活动价、额度和内容限制以服务为准。免费额度与签到属于服务本身的活动，本插件不会增加额度、自动签到或绕过服务限制。接口发生变化时可能需要更新插件。
+
+## 常见问题
+
+**提示“服务端组件未启动”**：确认安装器运行成功，再完整关闭并重启酒馆。单纯刷新浏览器不会载入新的服务端插件。
+
+**腾讯页面没自动打开**：点击插件里“打开腾讯登录页面”，在浏览器完成登录，然后返回酒馆。登录链接五分钟内有效；失效后重新点登录。
+
+**连接成功但不能生成**：先选择文字模型（例如账号可用的 `hy3`），检查官方额度，再刷新模型或重新登录。错误代码来自服务，插件不会尝试绕过内容或账户限制。
+
+**更新**：停止酒馆，在酒馆目录执行：
+
+```sh
+git -C plugins/sillytavern-workbuddy pull --ff-only
+node plugins/sillytavern-workbuddy/install.mjs
+```
+
+再用原来的方式启动酒馆。
+
+**停用**：在扩展管理里禁用前端；停止酒馆后，将本插件文件夹移出 `plugins`。若还使用其他服务端插件，保留 `enableServerPlugins: true`。需要恢复安装前配置时，可使用安装器生成的 `.workbuddy-*.bak` 备份。停用不清除账号文件；可先在插件界面点击“退出”移除此插件保存的腾讯授权。
+
+## 开发与来源
+
+无需额外 npm 依赖。运行 `npm test` 验证用户隔离、授权保存与续期、SSE 解析、请求限制、错误处理、跨站拒绝和取消请求。
+
+结构：`index.js` 是前端界面，`server.mjs` 注册酒馆插件，`lib/` 实现本机桥接与协议适配，`install.mjs` 安装前端并备份配置。
+
+实现参考了 [CangShui/workbuddy-gateway](https://github.com/CangShui/workbuddy-gateway) 的接口行为（参考版本 `96be5620f0429ce9e621bc418cc7d4660dd8f42c`），本仓库使用独立的 Node.js 实现，不分发其 Go 程序。酒馆插件机制参见 [服务端插件文档](https://docs.sillytavern.app/for-contributors/server-plugins/) 和 [扩展文档](https://docs.sillytavern.app/for-contributors/writing-extensions/)。
+
+本仓库的原创代码按 MIT 许可发布。与腾讯、WorkBuddy、CodeBuddy 或 SillyTavern 官方无隶属关系。

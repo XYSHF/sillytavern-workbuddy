@@ -1,0 +1,11 @@
+{
+  "name": "sillytavern-workbuddy",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "server.mjs",
+  "description": "Local WorkBuddy bridge and SillyTavern extension",
+  "engines": { "node": ">=20" },
+  "scripts": { "test": "node --test" },
+  "license": "MIT"
+}

@@ -1,0 +1,9 @@
+node_modules/
+.workbuddy-plugin/
+data/
+config.json
+*.log
+*.pid
+*.zip
+.env*
+coverage/

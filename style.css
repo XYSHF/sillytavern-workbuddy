@@ -1,0 +1,8 @@
+#workbuddy-local-settings .wb-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+#workbuddy-local-settings button { width: auto; white-space: normal; }
+#workbuddy-local-settings button:disabled { opacity: .5; cursor: default; }
+#workbuddy-local-settings .wb-status { overflow-wrap: anywhere; margin: 8px 0; }
+#workbuddy-local-settings .wb-model-label { display: block; margin-top: 10px; }
+#workbuddy-local-settings select { display: block; width: 100%; margin-top: 6px; }
+#workbuddy-local-settings small { display: block; opacity: .75; margin: 10px 0; }
+#workbuddy-local-settings [hidden] { display: none !important; }
